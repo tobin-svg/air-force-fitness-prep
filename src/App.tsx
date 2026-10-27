@@ -99,7 +99,7 @@ function Today() {
   const [restSeconds, setRestSeconds] = useState<number | null>(null)
   const [celebration, setCelebration] = useState<{ key: string; nonce: number } | null>(null)
   const [celebrationNonce, setCelebrationNonce] = useState(0)
-  const [plankSeconds, setPlankSeconds] = useState(30)
+  const [plankSeconds] = useState(30)
   const [runDistance, setRunDistance] = useState('')
   const [runMinutes, setRunMinutes] = useState('')
   const [startDate] = useState(() => localStorage.getItem('startDate') ?? localIso())
@@ -491,10 +491,6 @@ function SettingsSheet({ initial, onClose, onSave }: { initial: AppSettings; onC
     <label className="toggle-row"><span>Rest timer</span><input type="checkbox" checked={value.restTimerEnabled} onChange={(event) => setValue({ ...value, restTimerEnabled: event.target.checked })} /></label><label className="toggle-row"><span>Telegram messages</span><input type="checkbox" checked={value.telegramEnabled} onChange={(event) => setValue({ ...value, telegramEnabled: event.target.checked })} /></label>
     {error && <p className="form-error" role="alert">{error}</p>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
   </form></section></div>
-}
-
-function Empty({ title, copy, icon }: { title: string; copy: string; icon: string }) {
-  return <><header className="topbar"><span className="eyebrow">FITNESS PREP</span></header><section className="empty-state"><span className="empty-icon">{icon}</span><h1>{title}</h1><p>{copy}</p></section></>
 }
 
 export default App
