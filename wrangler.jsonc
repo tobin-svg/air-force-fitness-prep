@@ -14,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "fitness-prep",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "7d7ce9f4-997b-48d4-9dbe-d36b766c03ce",
       "migrations_dir": "migrations"
     }
   ]
