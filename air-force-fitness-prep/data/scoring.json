@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "status": "PLACEHOLDER_DO_NOT_USE",
+  "source": {
+    "title": "PLACEHOLDER: add the official Air Force source title",
+    "url": "PLACEHOLDER: add the official Air Force source URL",
+    "retrievedOn": null
+  },
+  "passingComposite": null,
+  "records": [
+    {
+      "ageBracket": "PLACEHOLDER",
+      "sex": "PLACEHOLDER",
+      "components": {
+        "pushups": {
+          "unit": "reps",
+          "higherIsBetter": true,
+          "minimum": null,
+          "bands": []
+        },
+        "situps": {
+          "unit": "reps",
+          "higherIsBetter": true,
+          "minimum": null,
+          "bands": []
+        },
+        "crunches": {
+          "unit": "reps",
+          "higherIsBetter": true,
+          "minimum": null,
+          "bands": []
+        },
+        "plank": {
+          "unit": "seconds",
+          "higherIsBetter": true,
+          "minimum": null,
+          "bands": []
+        },
+        "run": {
+          "unit": "seconds",
+          "higherIsBetter": false,
+          "minimum": null,
+          "bands": []
+        }
+      }
+    }
+  ]
+}
