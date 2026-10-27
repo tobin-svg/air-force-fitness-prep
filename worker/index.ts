@@ -215,7 +215,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (path === '/api/settings' && request.method === 'PUT') {
     const body = await readJson(request)
     if (!body || !body.settings || typeof body.settings !== 'object' || Array.isArray(body.settings) || !validSettings(body.settings as Record<string, unknown>)) return json({ error: 'invalid_settings' }, 400)
-    const settings = body.settings
+    const settings = body.settings as Record<string, any>
     await env.DB.prepare('INSERT INTO settings (id, settings_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at').bind(JSON.stringify(settings), new Date().toISOString()).run()
     const today = dateInZone(settings.timezone)
     await env.DB.prepare("UPDATE days SET plan_json = NULL WHERE date >= ? AND status IN ('pending', 'partial', 'rough')").bind(today).run()
