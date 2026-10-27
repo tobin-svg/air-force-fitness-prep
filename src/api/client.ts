@@ -2,8 +2,8 @@ export type Exercise = 'pushups' | 'situps' | 'crunches' | 'plank' | 'run' | 'ru
 export type SetRecord = { id: string; date: string; exercise: Exercise; value: number; unit: string; timestamp: string; undone?: number }
 export type AppSettings = {
   shipDate: string; timezone: string; morningMessageTime: string
-  baselines: { pushups: number | null; situps: number | null; plankSeconds: number | null; runTimeSeconds: number | null }
-  ageBracket: string; sex: string; overPrepMultiplier: number; restTimerEnabled: boolean; telegramEnabled: boolean
+  baselines: { pushups: number | null; situps: number | null; crunches: number | null; plankSeconds: number | null; runTimeSeconds: number | null }
+  ageBracket: string; sex: string; overPrepMultiplier: number; restTimerEnabled: boolean; restTimerSeconds: number; telegramEnabled: boolean
 }
 export type TodayPayload = { date: string; settings: AppSettings; day: { plan: unknown; status: string; rough_day: number } | null; planWarning?: string | null; sets: SetRecord[] }
 export type HistoryDay = { date: string; plan: unknown; status: 'pending' | 'complete' | 'partial' | 'missed' | 'rest' | 'rough'; rough_day: number; note: string | null; sets: SetRecord[] }

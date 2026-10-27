@@ -11,12 +11,24 @@ const tabs: { name: Tab; icon: string }[] = [
   { name: 'Score', icon: '◉' },
 ]
 const defaultSettings: AppSettings = {
-  shipDate: '', timezone: 'America/Chicago', morningMessageTime: '06:30',
-  baselines: { pushups: null, situps: null, plankSeconds: null, runTimeSeconds: null },
-  ageBracket: '', sex: '', overPrepMultiplier: 1.25, restTimerEnabled: true, telegramEnabled: false,
+  shipDate: '2027-02-01', timezone: 'America/Chicago', morningMessageTime: '06:30',
+  baselines: { pushups: null, situps: null, crunches: null, plankSeconds: null, runTimeSeconds: null },
+  ageBracket: 'Under 25', sex: 'M', overPrepMultiplier: 1.25, restTimerEnabled: true, restTimerSeconds: 60, telegramEnabled: false,
 }
-type PlannedExercise = { key: Exercise | 'core'; label: string; sets?: number; reps?: number; seconds?: number; miles?: number; minutes?: number; paceSecondsPerMile?: number; targetPaceSecondsPerMile?: number; kind?: string }
+type PlannedExercise = { key: Exercise | 'core'; label: string; sets?: number; reps?: number; setTargets?: number[]; seconds?: number; miles?: number; minutes?: number; paceSecondsPerMile?: number; targetPaceSecondsPerMile?: number; kind?: string }
 type DailyPlan = { restDay: boolean; exercises: PlannedExercise[]; warning?: string }
+function hasRepSetTargets(exercise: PlannedExercise): boolean {
+  return exercise.key === 'pushups' || exercise.key === 'situps' || exercise.key === 'crunches'
+}
+function repSetTargets(exercise: PlannedExercise, roughDay: boolean): number[] {
+  const original = exercise.setTargets ?? Array.from({ length: exercise.sets ?? 1 }, () => exercise.reps ?? 10)
+  if (!roughDay) return original
+  const minimum = exercise.key === 'pushups' ? 10 : 1
+  const total = Math.max(minimum, Math.floor(original.reduce((sum, reps) => sum + reps, 0) * 0.7))
+  const base = Math.floor(total / original.length)
+  const remainder = total % original.length
+  return original.map((_, index) => base + (index < remainder ? 1 : 0))
+}
 
 function localIso(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -85,6 +97,8 @@ function Today() {
   const [lastAction, setLastAction] = useState<SetRecord[]>([])
   const [busy, setBusy] = useState(false)
   const [restSeconds, setRestSeconds] = useState<number | null>(null)
+  const [celebration, setCelebration] = useState<{ key: string; nonce: number } | null>(null)
+  const [celebrationNonce, setCelebrationNonce] = useState(0)
   const [plankSeconds, setPlankSeconds] = useState(30)
   const [runDistance, setRunDistance] = useState('')
   const [runMinutes, setRunMinutes] = useState('')
@@ -133,7 +147,8 @@ function Today() {
     }
     setBusy(true); setNotice('')
     const date = today?.date ?? dateInTimezone(settings.timezone)
-    const plannedValue = exercise.key === 'pushups' || exercise.key === 'core' ? Math.max(1, Math.floor((exercise.reps ?? 1) * (roughDay ? 0.7 : 1))) : exercise.key === 'run' ? Number(runDistance) : exercise.key === 'stretch' ? exercise.minutes ?? 5 : exercise.seconds ?? 1
+    const plannedReps = hasRepSetTargets(exercise) ? repSetTargets(exercise, roughDay)[doneCount(exercise)] ?? 1 : null
+    const plannedValue = plannedReps !== null ? plannedReps : exercise.key === 'core' ? Math.max(1, Math.floor((exercise.reps ?? 1) * (roughDay ? 0.7 : 1))) : exercise.key === 'plank' ? Math.max(1, Math.floor((exercise.seconds ?? 1) * (roughDay ? 0.7 : 1))) : exercise.key === 'run' ? Number(runDistance) : exercise.key === 'stretch' ? exercise.minutes ?? 5 : exercise.seconds ?? 1
     const primary: Exercise = exercise.key === 'core' ? 'situps' : exercise.key
     const primaryUnit = primary === 'pushups' || primary === 'situps' || primary === 'crunches' ? 'reps' : primary === 'run' ? 'miles' : primary === 'plank' || primary === 'run_time' ? 'seconds' : 'minutes'
     const records: SetRecord[] = [{ id: crypto.randomUUID(), date, exercise: primary, value: plannedValue, unit: primaryUnit, timestamp: new Date().toISOString() }]
@@ -144,12 +159,16 @@ function Today() {
       const next = { ...old, sets: [...old.sets, ...records] }; localStorage.setItem('fitnessPrepTodayCache', JSON.stringify(next)); return next
     })
     setLastAction(records)
-    setRestSeconds(settings.restTimerEnabled ? 60 : null)
+    setRestSeconds(settings.restTimerEnabled ? (settings.restTimerSeconds ?? 60) : null)
     try {
       for (const record of records) await logSet(record)
       const allComplete = Boolean(plan && exercises.every((item) => doneCount(item) + (item.key === exercise.key ? 1 : 0) >= (item.sets ?? 1)))
       if (allComplete) await updateDayStatus(date, plan?.restDay ? 'rest' : 'complete')
       setNotice('Set saved.')
+      const nextNonce = celebrationNonce + 1
+      setCelebrationNonce(nextNonce)
+      setCelebration({ key: exercise.key, nonce: nextNonce })
+      window.setTimeout(() => setCelebration((current) => current?.nonce === nextNonce ? null : current), 760)
     }
     catch { setNotice('Could not sync this set yet. It is still visible on this device.') }
     finally { setBusy(false) }
@@ -174,15 +193,16 @@ function Today() {
     try { await markRoughDay(date) } catch { setNotice('Could not save the rough-day note.') }
   }
   function doneCount(exercise: PlannedExercise): number {
-    const type = exercise.key === 'core' ? ['situps', 'crunches'] : [exercise.key]
+    const type = exercise.key === 'core' ? ['situps', 'crunches', 'plank'] : [exercise.key]
     return activeSets.filter((set) => type.includes(set.exercise)).length
   }
   const dayComplete = Boolean(plan && !plan.restDay && exercises.every((exercise) => doneCount(exercise) >= (exercise.sets ?? 1)))
   async function saveSettings(value: AppSettings) {
     const result = await request<{ settings: AppSettings }>('/api/settings', 'PUT', { settings: value })
+    const refreshed = await request<TodayPayload>('/api/today')
     setToday((old) => {
-      if (!old) return old
-      const next = { ...old, settings: result.settings }; localStorage.setItem('fitnessPrepTodayCache', JSON.stringify(next)); return next
+      if (!old) return refreshed
+      const next = { ...refreshed, settings: result.settings }; localStorage.setItem('fitnessPrepTodayCache', JSON.stringify(next)); return next
     })
     setSettingsOpen(false)
   }
@@ -195,17 +215,19 @@ function Today() {
     {!plan && <div className="rest-banner"><span className="rest-icon">☼</span><div><strong>{today?.planWarning?.startsWith('Scoring data not loaded') ? 'Scoring data not loaded' : 'Plan not ready yet'}</strong><p>{today?.planWarning ?? 'Connect to load your saved training plan. Stretching can still be logged today.'}</p></div></div>}
     {dayComplete && <div className="completion-banner" role="status"><span>✦</span><div><strong>Day complete</strong><p>That’s today’s plan done. Nice work.</p></div></div>}
     {plan?.warning && <p className="plan-warning">{plan.warning}</p>}
-    {plan?.restDay && <div className="rest-banner"><span className="rest-icon">☼</span><div><strong>Rest day</strong><p>Stretching only. Rest days do not break your streak.</p></div></div>}
+    {plan?.restDay && <div className="rest-banner"><span className="rest-icon">☼</span><div><strong>Recovery day</strong><p>Your daily 10 push-ups and a stretch are the plan. This still counts as a recovery day.</p></div></div>}
     {plan && !plan.restDay && !roughDay && <button className="rough-button" onClick={() => void useRoughDay()}>Rough day · reduce today’s remaining volume</button>}
     {roughDay && <p className="status-note">Rough day recorded. Your streak stays intact.</p>}
     {exercises.map((exercise) => {
       const count = doneCount(exercise)
-      const target = exercise.sets ?? 1
+      const repTargets = hasRepSetTargets(exercise) ? repSetTargets(exercise, roughDay) : []
+      const target = hasRepSetTargets(exercise) ? repTargets.length : exercise.sets ?? 1
       const reps = Math.max(1, Math.floor((exercise.reps ?? 1) * (roughDay ? 0.7 : 1)))
       const plankTarget = Math.max(1, Math.floor((exercise.seconds ?? 1) * (roughDay ? 0.7 : 1)))
       const runTarget = (exercise.miles ?? 0) * (roughDay ? 0.7 : 1)
+      const description = exercise.key === 'pushups' ? `${repTargets.reduce((sum, value) => sum + value, 0)} push-ups · ${repTargets.join(' + ')} per set${roughDay ? ' · rough day' : ''}` : exercise.key === 'situps' || exercise.key === 'crunches' ? `${repTargets.reduce((sum, value) => sum + value, 0)} reps · ${repTargets.join(' + ')} per set${roughDay ? ' · rough day' : ''}` : exercise.key === 'core' ? `${exercise.sets} sets × ${reps} reps · plank target ${plankTarget}s${roughDay ? ' · rough day' : ''}` : exercise.key === 'plank' ? `${plankTarget} sec hold${roughDay ? ' · rough day' : ''}` : exercise.key === 'run' ? `${runTarget.toFixed(1)} mile target · ${exercise.kind ?? 'easy'} run${roughDay ? ' · rough day' : ''}` : '5 minutes · checklist'
       const isComplete = count >= target
-      return <section className="card stretch-card exercise-card" key={exercise.key}><div className="stretch-mark">{exercise.key === 'stretch' ? '↗' : exercise.key === 'run' ? '⌁' : '＋'}</div><div className="exercise-copy"><p className="eyebrow">{exercise.key === 'stretch' ? 'DAILY RESET · 5 MIN' : 'TODAY'}</p><h3>{exercise.label}</h3><p className="secondary">{exercise.key === 'pushups' ? `${exercise.sets} sets × ${reps}${roughDay ? ' · rough day' : ''}` : exercise.key === 'core' ? `${exercise.sets} sets × ${reps} reps · plank target ${plankTarget}s${roughDay ? ' · rough day' : ''}` : exercise.key === 'run' ? `${runTarget.toFixed(1)} mile target · ${exercise.kind ?? 'easy'} run${roughDay ? ' · rough day' : ''}` : '5 minutes · checklist'}</p>{exercise.key === 'run' && <p className="pace-guidance">Easy pace {formatPace(exercise.paceSecondsPerMile)}{exercise.targetPaceSecondsPerMile ? ` · test pace ${formatPace(exercise.targetPaceSecondsPerMile)}` : ''}</p>}{exercise.key === 'core' && <div className="stepper"><button type="button" onClick={() => setPlankSeconds((seconds) => Math.max(1, seconds - 5))} aria-label="Reduce plank seconds">−</button><span>Log hold: {plankSeconds} sec</span><button type="button" onClick={() => setPlankSeconds((seconds) => seconds + 5)} aria-label="Add plank seconds">+</button></div>}{exercise.key === 'run' && <div className="run-inputs"><label>Distance (mi)<input type="number" min="0.1" step="0.1" value={runDistance} onChange={(event) => setRunDistance(event.target.value)} /></label><label>Time (min)<input type="number" min="1" step="0.1" value={runMinutes} onChange={(event) => setRunMinutes(event.target.value)} /></label></div>}<small>{count} / {target} complete</small></div><button className={isComplete ? 'check-button completed' : 'check-button'} onClick={() => void complete(exercise)} disabled={isComplete || busy} aria-label={`Log ${exercise.label}`}>{isComplete ? '✓' : '+'}</button></section>
+      return <section className="card stretch-card exercise-card" key={exercise.key}><div className="stretch-mark">{exercise.key === 'stretch' ? '↗' : exercise.key === 'run' ? '⌁' : '＋'}</div><div className="exercise-copy"><p className="eyebrow">{exercise.key === 'stretch' ? 'DAILY RESET · 5 MIN' : 'TODAY'}</p><h3>{exercise.label}</h3><p className="secondary">{description}</p>{exercise.key === 'run' && <p className="pace-guidance">Easy pace {formatPace(exercise.paceSecondsPerMile)}{exercise.targetPaceSecondsPerMile ? ` · test pace ${formatPace(exercise.targetPaceSecondsPerMile)}` : ''}</p>}{exercise.key === 'run' && <div className="run-inputs"><label>Distance (mi)<input type="number" min="0.1" step="0.1" value={runDistance} onChange={(event) => setRunDistance(event.target.value)} /></label><label>Time (min)<input type="number" min="1" step="0.1" value={runMinutes} onChange={(event) => setRunMinutes(event.target.value)} /></label></div>}<small>{count} / {target} complete</small></div><button className={isComplete ? 'check-button completed' : 'check-button'} onClick={() => void complete(exercise)} disabled={isComplete || busy} aria-label={`Log ${exercise.label}`}>{isComplete ? '✓' : '+'}</button>{celebration?.key === exercise.key && <div key={celebration.nonce} className="celebration-burst" aria-hidden="true"><span>✦</span><span>★</span><span>✧</span><span>✦</span><span>✦</span></div>}</section>
     })}
     {notice && <p className="status-note" role="status">{notice}</p>}
     {restSeconds !== null && <div className="timer-banner"><span>Rest timer</span><strong>{Math.floor(restSeconds / 60)}:{String(restSeconds % 60).padStart(2, '0')}</strong><button onClick={() => setRestSeconds(null)}>Skip</button></div>}
@@ -285,7 +307,7 @@ function PlanComparison({ day }: { day: HistoryDay }) {
   return <div className="plan-comparison">{(plan.exercises ?? []).map((exercise, index) => {
     const exercises = exercise.key === 'core' ? ['situps', 'crunches', 'plank'] : exercise.key === 'run' ? ['run', 'run_time'] : [exercise.key]
     const records = day.sets.filter((set) => !set.undone && exercises.includes(set.exercise))
-    const planned = exercise.key === 'pushups' || exercise.key === 'core' ? `${exercise.sets ?? 0} sets × ${exercise.reps ?? 0}${exercise.key === 'core' ? ` reps · plank ${exercise.seconds ?? 0}s` : ''}` : exercise.key === 'run' ? `${exercise.miles?.toFixed(1) ?? '—'} mi · ${exercise.kind ?? 'run'}` : `${exercise.minutes ?? 5} min`
+    const planned = exercise.key === 'pushups' || exercise.key === 'situps' || exercise.key === 'crunches' ? `${exercise.setTargets?.reduce((sum, reps) => sum + reps, 0) ?? exercise.reps ?? 10} reps · ${exercise.setTargets?.join(' + ') ?? 'daily minimum'}` : exercise.key === 'core' ? `${exercise.sets ?? 0} sets × ${exercise.reps ?? 0} reps` : exercise.key === 'plank' ? `${exercise.seconds ?? 0} sec hold` : exercise.key === 'run' ? `${exercise.miles?.toFixed(1) ?? '—'} mi · ${exercise.kind ?? 'run'}` : `${exercise.minutes ?? 5} min`
     const completed = records.length ? records.map((set) => `${set.value}${set.unit === 'reps' ? ' reps' : set.unit === 'seconds' ? ' sec' : set.unit === 'miles' ? ' mi' : ' min'}`).join(' · ') : 'Nothing logged'
     return <div className="comparison-row" key={`${exercise.key}-${index}`}><strong>{exercise.label}</strong><span><small>Planned</small>{planned}</span><span><small>Completed</small>{completed}</span></div>
   })}</div>
@@ -348,17 +370,19 @@ function weeklyRepTotals(days: HistoryDay[], today: string) {
 }
 
 type MaxTest = { id: string; date: string; metrics: Record<string, number | null> }
-type ScoreInputs = { pushups: string; coreMetric: 'situps' | 'crunches'; coreValue: string; plankSeconds: string; runTime: string }
+type ScoreInputs = { pushups: string; coreMetric: 'situps' | 'crunches' | 'plank'; coreValue: string; runTime: string; waistInches: string; heightInches: string }
 const loadedScoringData = scoringFile as unknown as ScoringData
 function scoreInputsFrom(metrics: Record<string, number | null> | undefined, settings: AppSettings): ScoreInputs {
-  const coreMetric = metrics?.crunches != null && metrics.situps == null ? 'crunches' : 'situps'
-  const coreFallback = coreMetric === 'situps' ? settings.baselines.situps : null
+  const coreMetric = metrics?.plankSeconds != null && metrics.situps == null && metrics.crunches == null ? 'plank' : metrics?.crunches != null && metrics.situps == null ? 'crunches' : 'situps'
+  const coreFallback = coreMetric === 'situps' ? settings.baselines.situps : coreMetric === 'crunches' ? settings.baselines.crunches : settings.baselines.plankSeconds
+  const coreKey = coreMetric === 'plank' ? 'plankSeconds' : coreMetric
   return {
     pushups: String(metrics?.pushups ?? settings.baselines.pushups ?? ''),
     coreMetric,
-    coreValue: String(metrics?.[coreMetric] ?? coreFallback ?? ''),
-    plankSeconds: String(metrics?.plankSeconds ?? settings.baselines.plankSeconds ?? ''),
+    coreValue: String(metrics?.[coreKey] ?? coreFallback ?? ''),
     runTime: formatRunTime(metrics?.runTimeSeconds ?? settings.baselines.runTimeSeconds ?? null),
+    waistInches: String(metrics?.waistInches ?? ''),
+    heightInches: String(metrics?.heightInches ?? ''),
   }
 }
 function Score() {
@@ -384,9 +408,11 @@ function Score() {
     const parsedRun = inputs.runTime === '' ? null : parseRunTime(inputs.runTime)
     return {
       pushups: inputs.pushups === '' ? null : Number(inputs.pushups),
-      [inputs.coreMetric]: inputs.coreValue === '' ? null : Number(inputs.coreValue),
-      plankSeconds: inputs.plankSeconds === '' ? null : Number(inputs.plankSeconds),
+      ...(inputs.coreMetric === 'plank' ? { plankSeconds: inputs.coreValue === '' ? null : Number(inputs.coreValue) } : { [inputs.coreMetric]: inputs.coreValue === '' ? null : Number(inputs.coreValue) }),
       runTimeSeconds: parsedRun,
+      waistInches: inputs.waistInches === '' ? null : Number(inputs.waistInches),
+      heightInches: inputs.heightInches === '' ? null : Number(inputs.heightInches),
+      waistToHeight: inputs.waistInches === '' || inputs.heightInches === '' ? null : Math.round(Number(inputs.waistInches) / Number(inputs.heightInches) * 100) / 100,
     }
   }
   function validMetrics(metrics: Record<string, number | null>) {
@@ -396,7 +422,7 @@ function Score() {
     if (!dataLoaded) { setMessage('Scoring data not loaded. No standards have been entered yet.'); return }
     if (!settings.ageBracket || !settings.sex) { setMessage('Set your age bracket and sex category in Settings first.'); return }
     const metrics = metricPayload()
-    if (!validMetrics(metrics)) { setMessage('Enter all four test measurements to calculate your score.'); return }
+    if (!validMetrics(metrics)) { setMessage('Enter your push-ups, selected core result, 2-mile time, waist, and height to calculate your score.'); return }
     setCalculating(true); setMessage('')
     try {
       const score = await request<ScoreResult>('/api/score', 'POST', { metrics, coreMetric: inputs.coreMetric })
@@ -408,7 +434,7 @@ function Score() {
   }
   async function logTest() {
     const metrics = metricPayload()
-    if (!validMetrics(metrics)) { setMessage('Enter all four measurements before logging a max test.'); return }
+    if (!validMetrics(metrics)) { setMessage('Enter your push-ups, selected core result, 2-mile time, waist, and height before logging a max test.'); return }
     setSavingTest(true); setMessage('')
     try {
       const saved = await request<MaxTest>('/api/tests', 'POST', { date: today, metrics })
@@ -423,17 +449,18 @@ function Score() {
     <header className="topbar"><span className="eyebrow">FITNESS PREP</span></header>
     <section className="score-title"><p className="eyebrow">YOUR TEST PROFILE</p><h1>Score</h1><p className="secondary">{settings.ageBracket || 'Age bracket not set'} · {settings.sex || 'sex category not set'}</p></section>
     {!dataLoaded && <div className="scoring-unavailable"><span>◉</span><div><strong>Scoring data not loaded</strong><p>The official table has not been added yet, so the app won’t show sample or guessed scores. You can still save a max test.</p></div></div>}
-    <section className="card score-form"><h2>Test results</h2><div className="score-input-grid"><label>Push-ups<input type="number" min="1" inputMode="numeric" value={inputs.pushups} onChange={(event) => update('pushups', event.target.value)} /></label><label>Core event<select value={inputs.coreMetric} onChange={(event) => { const coreMetric = event.target.value as 'situps' | 'crunches'; setInputs((old) => ({ ...old, coreMetric, coreValue: '' })); setResult(null) }}><option value="situps">Sit-ups</option><option value="crunches">Cross-leg reverse crunches</option></select></label><label>{inputs.coreMetric === 'situps' ? 'Sit-ups' : 'Cross-leg reverse crunches'}<input type="number" min="1" inputMode="numeric" value={inputs.coreValue} onChange={(event) => update('coreValue', event.target.value)} /></label><label>Plank (seconds)<input type="number" min="1" inputMode="numeric" value={inputs.plankSeconds} onChange={(event) => update('plankSeconds', event.target.value)} /></label><label>1.5-mile time (mm:ss)<input type="text" inputMode="numeric" placeholder="14:30" value={inputs.runTime} onChange={(event) => update('runTime', event.target.value)} /></label></div><div className="score-actions"><button className="primary-button" onClick={() => void calculate()} disabled={!dataLoaded || calculating}>{calculating ? 'Calculating…' : 'Calculate score'}</button><button className="secondary-button" onClick={() => void logTest()} disabled={savingTest}>{savingTest ? 'Saving…' : 'Log a max test'}</button></div>{message && <p className="status-note" role="status">{message}</p>}</section>
+    <section className="card score-form"><h2>Test results</h2><div className="score-input-grid"><label>Push-ups<input type="number" min="1" inputMode="numeric" value={inputs.pushups} onChange={(event) => update('pushups', event.target.value)} /></label><label>Core event<select value={inputs.coreMetric} onChange={(event) => { const coreMetric = event.target.value as 'situps' | 'crunches' | 'plank'; const fallback = coreMetric === 'situps' ? settings.baselines.situps : coreMetric === 'crunches' ? settings.baselines.crunches : settings.baselines.plankSeconds; setInputs((old) => ({ ...old, coreMetric, coreValue: String(fallback ?? '') })); setResult(null) }}><option value="situps">Sit-ups</option><option value="crunches">Cross-leg reverse crunches</option><option value="plank">Plank</option></select></label><label>{inputs.coreMetric === 'situps' ? 'Sit-ups in 1 minute' : inputs.coreMetric === 'crunches' ? 'Cross-leg reverse crunches in 1 minute' : 'Plank (seconds)'}<input type="number" min="1" inputMode="numeric" value={inputs.coreValue} onChange={(event) => update('coreValue', event.target.value)} /></label><label>2-mile time (mm:ss)<input type="text" inputMode="numeric" placeholder="19:45" value={inputs.runTime} onChange={(event) => update('runTime', event.target.value)} /></label><label>Waist (inches)<input type="number" min="1" step="0.1" value={inputs.waistInches} onChange={(event) => update('waistInches', event.target.value)} /></label><label>Height (inches)<input type="number" min="1" step="0.1" value={inputs.heightInches} onChange={(event) => update('heightInches', event.target.value)} /></label></div><p className="empty-hint">The Air Force chart scores one core event. Training still includes all three.</p><div className="score-actions"><button className="primary-button" onClick={() => void calculate()} disabled={!dataLoaded || calculating}>{calculating ? 'Calculating…' : 'Calculate score'}</button><button className="secondary-button" onClick={() => void logTest()} disabled={savingTest}>{savingTest ? 'Saving…' : 'Log a max test'}</button></div>{message && <p className="status-note" role="status">{message}</p>}</section>
     {result && <section className="card score-result"><div className="composite-row"><div><p className="eyebrow">COMPOSITE SCORE</p><strong>{result.composite ?? '—'}</strong><span>{result.passingComposite !== null ? ` / ${result.passingComposite} to pass` : ''}</span></div><span className={`pass-badge ${result.passed === true ? 'passed' : result.passed === false ? 'not-passed' : ''}`}>{result.passed === true ? 'PASS' : result.passed === false ? 'NOT YET' : 'INCOMPLETE'}</span></div>{result.components.map((component) => <div className="score-component" key={component.name}><div><strong>{component.name}</strong><span>{component.points === null ? 'Outside the supplied point ranges' : `${component.points} points`}</span></div><p>{gapText(component.gapToPassing, component, 'pass')} <span>·</span> {gapText(component.gapToOverPrep, component, 'target')}</p></div>)}</section>}
     <section className="history-section score-tests"><div className="history-section-heading"><h2>Max test history</h2><span>{tests.length} saved</span></div>{tests.length === 0 ? <p className="empty-hint">Logged tests will appear here as a simple trend list.</p> : <div className="history-list">{tests.map((test) => <div className="history-entry test-entry" key={test.id}><span className="entry-copy"><strong>{formatDate(test.date)}</strong><small>{test.metrics.pushups ?? '—'} push-ups · {test.metrics[inputs.coreMetric] ?? '—'} {inputs.coreMetric === 'situps' ? 'sit-ups' : 'crunches'} · {test.metrics.plankSeconds ?? '—'}s plank · {test.metrics.runTimeSeconds ? formatRunTime(test.metrics.runTimeSeconds) : '—'} run</small></span></div>)}</div>}</section>
   </>
 }
 function gapText(gap: number | null, component: ScoreResult['components'][number], kind: 'pass' | 'target') {
   const target = kind === 'pass' ? 'passing minimum' : 'over-prepared target'
+  if (component.unit === 'ratio') return kind === 'pass' ? 'Scored directly from the chart' : 'No over-prepared target for this component'
   if (gap === null) return `${target}: —`
   if (gap === 0) return `${kind === 'pass' ? 'Meets' : 'At'} ${target}`
   const amount = Number.isInteger(gap) ? String(gap) : gap.toFixed(1)
-  if (component.name === '1.5-mile run') return `Need ${formatRunTime(Math.ceil(gap))} faster for ${target}`
+  if (component.name === '2-mile run') return `Need ${formatRunTime(Math.ceil(gap))} faster for ${target}`
   return `Need ${amount} ${component.unit} more for ${target}`
 }
 
@@ -448,7 +475,7 @@ function SettingsSheet({ initial, onClose, onSave }: { initial: AppSettings; onC
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setSaving(true); setError('')
     const parsedTime = runTimeText === '' ? null : parseRunTime(runTimeText)
-    if (runTimeText !== '' && parsedTime === null) { setError('Enter your 1.5-mile time as minutes:seconds, for example 14:30.'); setSaving(false); return }
+    if (runTimeText !== '' && parsedTime === null) { setError('Enter your 2-mile time as minutes:seconds, for example 19:45.'); setSaving(false); return }
     try { await onSave({ ...value, baselines: { ...value.baselines, runTimeSeconds: parsedTime } }) } catch { setError('Could not save these settings. Check the values and try again.') }
     finally { setSaving(false) }
   }
@@ -457,8 +484,10 @@ function SettingsSheet({ initial, onClose, onSave }: { initial: AppSettings; onC
     <label>Timezone<input value={value.timezone} onChange={(event) => setValue({ ...value, timezone: event.target.value })} required /></label>
     <label>Morning message time<input type="time" value={value.morningMessageTime} onChange={(event) => setValue({ ...value, morningMessageTime: event.target.value })} required /></label>
     <p className="settings-group-title">Baseline measurements</p>
-    <div className="settings-grid"><label>Push-ups<input type="number" min="1" value={value.baselines.pushups ?? ''} onChange={(event) => numberField('pushups', event.target.value)} /></label><label>Sit-ups / crunches<input type="number" min="1" value={value.baselines.situps ?? ''} onChange={(event) => numberField('situps', event.target.value)} /></label><label>Plank seconds<input type="number" min="1" value={value.baselines.plankSeconds ?? ''} onChange={(event) => numberField('plankSeconds', event.target.value)} /></label><label>1.5-mile time (mm:ss)<input type="text" inputMode="numeric" placeholder="14:30" value={runTimeText} onChange={(event) => setRunTimeText(event.target.value)} /></label></div>
-    <p className="settings-group-title">Scoring profile</p><label>Age bracket<input value={value.ageBracket} onChange={(event) => setValue({ ...value, ageBracket: event.target.value })} placeholder="Set from official scoring table" /></label><label>Sex category<input value={value.sex} onChange={(event) => setValue({ ...value, sex: event.target.value })} placeholder="Set from official scoring table" /></label><label>Over-prepared target multiplier<input type="number" min="1" max="3" step="0.05" value={value.overPrepMultiplier} onChange={(event) => setValue({ ...value, overPrepMultiplier: Number(event.target.value) })} /></label>
+    <p className="settings-help">These are your starting results. Replace the example numbers with your own; leave a field empty if you do not know it yet.</p>
+    <div className="settings-grid"><label>Push-ups in 1 minute<input type="number" min="1" value={value.baselines.pushups ?? ''} onChange={(event) => numberField('pushups', event.target.value)} /></label><label>Sit-ups in 1 minute<input type="number" min="1" value={value.baselines.situps ?? ''} onChange={(event) => numberField('situps', event.target.value)} /></label><label>Cross-leg reverse crunches in 1 minute<input type="number" min="1" value={value.baselines.crunches ?? ''} onChange={(event) => numberField('crunches', event.target.value)} /></label><label>Plank hold (seconds)<input type="number" min="1" value={value.baselines.plankSeconds ?? ''} onChange={(event) => numberField('plankSeconds', event.target.value)} /></label><label>2-mile time (mm:ss)<input type="text" inputMode="numeric" placeholder="19:45" value={runTimeText} onChange={(event) => setRunTimeText(event.target.value)} /></label></div>
+    <p className="settings-group-title">Scoring profile</p><label>Age bracket<select value={value.ageBracket} onChange={(event) => setValue({ ...value, ageBracket: event.target.value })}>{['Under 25','25-29','30-34','35-39','40-44','45-49','50-54','55-59','60 and Over'].map((age) => <option key={age} value={age}>{age}</option>)}</select></label><label>Sex category<select value={value.sex} onChange={(event) => setValue({ ...value, sex: event.target.value })}><option value="M">Male (M)</option><option value="F">Female (F)</option></select></label><label>Over-prepared target multiplier<input type="number" min="1" max="3" step="0.05" value={value.overPrepMultiplier} onChange={(event) => setValue({ ...value, overPrepMultiplier: Number(event.target.value) })} /></label>
+    <label>Rest timer length (seconds)<input type="number" min="15" max="300" step="15" value={value.restTimerSeconds} onChange={(event) => setValue({ ...value, restTimerSeconds: Number(event.target.value) })} required /></label>
     <label className="toggle-row"><span>Rest timer</span><input type="checkbox" checked={value.restTimerEnabled} onChange={(event) => setValue({ ...value, restTimerEnabled: event.target.checked })} /></label><label className="toggle-row"><span>Telegram messages</span><input type="checkbox" checked={value.telegramEnabled} onChange={(event) => setValue({ ...value, telegramEnabled: event.target.checked })} /></label>
     {error && <p className="form-error" role="alert">{error}</p>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
   </form></section></div>

@@ -1,9 +1,9 @@
 export type ScoreBand = { minRaw: number; maxRaw: number | null; points: number }
-export type ComponentStandard = { unit: 'reps' | 'seconds'; higherIsBetter: boolean; minimum: number; bands: ScoreBand[] }
-export type ScoringRecord = { ageBracket: string; sex: string; components: Partial<Record<'pushups' | 'situps' | 'crunches' | 'plank' | 'run', ComponentStandard>> }
+export type ComponentStandard = { unit: 'reps' | 'seconds' | 'ratio'; higherIsBetter: boolean; minimum: number; minimumPoints?: number; maxPoints?: number; bands: ScoreBand[] }
+export type ScoringRecord = { ageBracket: string; sex: string; components: Partial<Record<'pushups' | 'situps' | 'crunches' | 'plank' | 'run' | 'waistToHeight', ComponentStandard>> }
 export type ScoringData = { schemaVersion: number; status: string; source: { title: string; url: string; retrievedOn: string | null }; passingComposite: number | null; records: ScoringRecord[] }
-export type ScoreMetric = 'pushups' | 'situps' | 'crunches' | 'plankSeconds' | 'runTimeSeconds'
-export type ScoreQuery = { ageBracket: string; sex: string; coreMetric: 'situps' | 'crunches'; metrics: Partial<Record<ScoreMetric, number>>; overPrepMultiplier: number }
+export type ScoreMetric = 'pushups' | 'situps' | 'crunches' | 'plankSeconds' | 'runTimeSeconds' | 'waistToHeight'
+export type ScoreQuery = { ageBracket: string; sex: string; coreMetric: 'situps' | 'crunches' | 'plank'; metrics: Partial<Record<ScoreMetric, number>>; overPrepMultiplier: number }
 export type ComponentResult = { name: string; unit: string; points: number | null; minimum: number; higherIsBetter: boolean; gapToPassing: number | null; overPrepTarget: number | null; gapToOverPrep: number | null }
 export type ScoreResult = { ready: boolean; reason?: 'scoring_data_not_loaded' | 'profile_not_found'; composite: number | null; passingComposite: number | null; passed: boolean | null; components: ComponentResult[] }
 
@@ -11,12 +11,12 @@ export function isScoringDataLoaded(data: ScoringData): boolean {
   if (data.status !== 'LOADED' || !data.source?.title || data.source.title.includes('PLACEHOLDER') || !/^https:\/\//.test(data.source.url ?? '') || !/^\d{4}-\d{2}-\d{2}$/.test(data.source.retrievedOn ?? '') || !Number.isFinite(data.passingComposite) || !Array.isArray(data.records) || !data.records.length) return false
   return data.records.every((record) => {
     if (!record.ageBracket || record.ageBracket === 'PLACEHOLDER' || !record.sex || record.sex === 'PLACEHOLDER') return false
-    const standards = [record.components.pushups, record.components.plank, record.components.run]
+    const standards = [record.components.pushups, record.components.plank, record.components.run, record.components.waistToHeight]
     if (standards.some((component) => !component)) return false
     if (!record.components.situps && !record.components.crunches) return false
     const all = [...standards, record.components.situps, record.components.crunches].filter((component): component is ComponentStandard => component !== undefined)
     return all.every((component) => {
-      if (!['reps', 'seconds'].includes(component.unit) || !Number.isFinite(component.minimum) || component.minimum <= 0 || typeof component.higherIsBetter !== 'boolean' || !Array.isArray(component.bands) || component.bands.length === 0) return false
+      if (!['reps', 'seconds', 'ratio'].includes(component.unit) || !Number.isFinite(component.minimum) || component.minimum <= 0 || typeof component.higherIsBetter !== 'boolean' || !Array.isArray(component.bands) || component.bands.length === 0) return false
       const bands = [...component.bands].sort((a, b) => a.minRaw - b.minRaw)
       let previous: ScoreBand | undefined
       for (const band of bands) {
@@ -42,9 +42,9 @@ export function calculateScore(data: ScoringData, query: ScoreQuery): ScoreResul
   const selectedCore = query.coreMetric
   const metrics: Array<{ key: keyof ScoringRecord['components']; input: ScoreMetric; name: string }> = [
     { key: 'pushups', input: 'pushups', name: 'Push-ups' },
-    { key: selectedCore, input: selectedCore, name: selectedCore === 'situps' ? 'Sit-ups' : 'Crunches' },
-    { key: 'plank', input: 'plankSeconds', name: 'Plank' },
-    { key: 'run', input: 'runTimeSeconds', name: '1.5-mile run' },
+    { key: selectedCore, input: selectedCore === 'plank' ? 'plankSeconds' : selectedCore, name: selectedCore === 'situps' ? 'Sit-ups' : selectedCore === 'crunches' ? 'Cross-leg reverse crunches' : 'Plank' },
+    { key: 'run', input: 'runTimeSeconds', name: '2-mile run' },
+    { key: 'waistToHeight', input: 'waistToHeight', name: 'Waist-to-height ratio' },
   ]
   const components: ComponentResult[] = []
   for (const item of metrics) {
@@ -52,11 +52,11 @@ export function calculateScore(data: ScoringData, query: ScoreQuery): ScoreResul
     const raw = query.metrics[item.input]
     if (!standard || raw === undefined || !Number.isFinite(raw) || raw <= 0) continue
     const band = findBand(standard, raw)
-    const overPrepTarget = standard.higherIsBetter ? standard.minimum * query.overPrepMultiplier : standard.minimum / query.overPrepMultiplier
-    components.push({ name: item.name, unit: standard.unit, points: band?.points ?? null, minimum: standard.minimum, higherIsBetter: standard.higherIsBetter, gapToPassing: gap(raw, standard.minimum, standard.higherIsBetter), overPrepTarget, gapToOverPrep: gap(raw, overPrepTarget, standard.higherIsBetter) })
+    const overPrepTarget = standard.unit === 'ratio' ? null : standard.higherIsBetter ? standard.minimum * query.overPrepMultiplier : standard.minimum / query.overPrepMultiplier
+    components.push({ name: item.name, unit: standard.unit, points: band?.points ?? null, minimum: standard.minimum, higherIsBetter: standard.higherIsBetter, gapToPassing: standard.unit === 'ratio' ? null : gap(raw, standard.minimum, standard.higherIsBetter), overPrepTarget, gapToOverPrep: overPrepTarget === null ? null : gap(raw, overPrepTarget, standard.higherIsBetter) })
   }
   const complete = components.length === metrics.length && components.every((component) => component.points !== null)
   const composite = complete ? components.reduce((sum, component) => sum + (component.points ?? 0), 0) : null
-  const passed = composite === null ? null : components.every((component) => component.gapToPassing === 0) && composite >= data.passingComposite!
+  const passed = composite === null ? null : components.filter((component) => component.name !== 'Waist-to-height ratio').every((component) => component.gapToPassing === 0) && composite >= data.passingComposite!
   return { ready: true, composite, passingComposite: data.passingComposite, passed, components }
 }

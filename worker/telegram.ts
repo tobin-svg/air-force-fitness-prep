@@ -26,11 +26,13 @@ export function formatCountdown(shipDate: string, today: string) {
 export function formatPlan(planJson: string | null) {
   if (!planJson) return 'Today: training plan not available yet.'
   try {
-    const plan = JSON.parse(planJson) as { restDay?: boolean; exercises?: Array<{ key?: string; label?: string; sets?: number; reps?: number; seconds?: number; miles?: number; minutes?: number; kind?: string }> }
-    if (plan.restDay) return 'Today: Rest day · Stretch 5 min'
+    const plan = JSON.parse(planJson) as { restDay?: boolean; exercises?: Array<{ key?: string; label?: string; sets?: number; reps?: number; setTargets?: number[]; seconds?: number; miles?: number; minutes?: number; kind?: string }> }
+    if (plan.restDay) return 'Today: Recovery day · 10 push-ups · Stretch 5 min'
     const lines = (plan.exercises ?? []).map((exercise) => {
-      if (exercise.key === 'pushups') return `Push-ups: ${exercise.sets ?? 1} sets × ${exercise.reps ?? '—'}`
+      if (exercise.key === 'pushups') return `Push-ups: ${exercise.setTargets?.reduce((sum, reps) => sum + reps, 0) ?? exercise.reps ?? 10} total (${exercise.setTargets?.join(' + ') ?? 'daily minimum'})`
       if (exercise.key === 'core') return `Core: ${exercise.sets ?? 1} sets × ${exercise.reps ?? '—'} · Plank ${exercise.seconds ?? '—'} sec`
+      if (exercise.key === 'situps' || exercise.key === 'crunches') return `${exercise.label}: ${exercise.sets ?? 1} sets × ${exercise.reps ?? '—'}`
+      if (exercise.key === 'plank') return `Plank: ${exercise.seconds ?? '—'} sec`
       if (exercise.key === 'run') return `Run: ${exercise.miles ?? '—'} mi · ${exercise.kind ?? 'run'}`
       if (exercise.key === 'stretch') return `Stretch: ${exercise.minutes ?? 5} min`
       return ''

@@ -17,18 +17,19 @@ type Settings = {
   shipDate: string
   timezone: string
   morningMessageTime: string
-  baselines: { pushups: number | null; situps: number | null; plankSeconds: number | null; runTimeSeconds: number | null }
+  baselines: { pushups: number | null; situps: number | null; crunches: number | null; plankSeconds: number | null; runTimeSeconds: number | null }
   ageBracket: string
   sex: string
   overPrepMultiplier: number
   restTimerEnabled: boolean
+  restTimerSeconds: number
   telegramEnabled: boolean
 }
 
 const defaults: Settings = {
-  shipDate: '', timezone: 'America/Chicago', morningMessageTime: '06:30',
-  baselines: { pushups: null, situps: null, plankSeconds: null, runTimeSeconds: null },
-  ageBracket: '', sex: '', overPrepMultiplier: 1.25, restTimerEnabled: true, telegramEnabled: false,
+  shipDate: '2027-02-01', timezone: 'America/Chicago', morningMessageTime: '06:30',
+  baselines: { pushups: null, situps: null, crunches: null, plankSeconds: null, runTimeSeconds: null },
+  ageBracket: 'Under 25', sex: 'M', overPrepMultiplier: 1.25, restTimerEnabled: true, restTimerSeconds: 60, telegramEnabled: false,
 }
 const cookieName = 'fitness_prep_session'
 const oneYearSeconds = 60 * 60 * 24 * 365
@@ -92,20 +93,33 @@ async function readJson(request: Request): Promise<Record<string, unknown> | nul
 async function getSettings(db: D1Database): Promise<Settings> {
   const row = await db.prepare('SELECT settings_json FROM settings WHERE id = 1').first<{ settings_json: string }>()
   if (!row) return defaults
-  try { return { ...defaults, ...JSON.parse(row.settings_json), baselines: { ...defaults.baselines, ...JSON.parse(row.settings_json).baselines } } }
+  try {
+    const saved = JSON.parse(row.settings_json)
+    const oldBaselineFormat = !Object.hasOwn(saved.baselines ?? {}, 'crunches')
+    const settings = { ...defaults, ...saved, baselines: { ...defaults.baselines, ...saved.baselines } }
+    if (!settings.shipDate) settings.shipDate = defaults.shipDate
+    if (!settings.ageBracket) settings.ageBracket = defaults.ageBracket
+    if (!settings.sex) settings.sex = defaults.sex
+    if (oldBaselineFormat) settings.baselines.runTimeSeconds = null
+    return settings
+  }
   catch { return defaults }
 }
 async function ensureTodayPlan(db: D1Database, settings: Settings, date: string): Promise<{ plan: DayPlan | null; warning: string | null }> {
-  const saved = await db.prepare('SELECT plan_json FROM days WHERE date = ?').bind(date).first<{ plan_json: string | null }>()
-  if (saved?.plan_json) return { plan: JSON.parse(saved.plan_json) as DayPlan, warning: null }
+  const saved = await db.prepare('SELECT plan_json, status FROM days WHERE date = ?').bind(date).first<{ plan_json: string | null; status: string }>()
+  if (saved?.plan_json) {
+    const existing = JSON.parse(saved.plan_json) as DayPlan
+    if (existing.planVersion === 2 || saved.status === 'complete' || saved.status === 'rest') return { plan: existing, warning: null }
+    await db.prepare('UPDATE days SET plan_json = NULL WHERE date = ?').bind(date).run()
+  }
   const data = scoringFile as unknown as ScoringData
   if (!isScoringDataLoaded(data)) return { plan: null, warning: 'Scoring data not loaded. Add the verified official table before generating training targets.' }
   const record = data.records.find((item) => item.ageBracket === settings.ageBracket && item.sex === settings.sex)
   if (!record) return { plan: null, warning: 'Your Settings age bracket and sex category do not match a scoring record.' }
   const core = record.components.situps ? 'situps' : 'crunches'
   const baseline = settings.baselines
-  if (![baseline.pushups, baseline.situps, baseline.plankSeconds, baseline.runTimeSeconds].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
-    return { plan: null, warning: 'Add all four baseline measurements in Settings to generate your plan.' }
+  if (![baseline.pushups, baseline.situps, baseline.crunches, baseline.plankSeconds, baseline.runTimeSeconds].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
+    return { plan: null, warning: 'Add your baseline results for push-ups, sit-ups, cross-leg reverse crunches, plank, and 2-mile run in Settings to generate your plan.' }
   }
   if (!settings.shipDate) return { plan: null, warning: 'Add your ship date in Settings to generate your plan.' }
   if (date > settings.shipDate) return { plan: null, warning: 'Your ship date has passed. Update it in Settings to generate a new plan.' }
@@ -113,10 +127,11 @@ async function ensureTodayPlan(db: D1Database, settings: Settings, date: string)
   const generated = generatePlan({
     startDate: firstDay?.date ?? date,
     shipDate: settings.shipDate,
-    baseline: { pushups: baseline.pushups!, situps: baseline.situps!, plankSeconds: baseline.plankSeconds!, runTimeSeconds: baseline.runTimeSeconds! },
+    baseline: { pushups: baseline.pushups!, situps: baseline.situps!, crunches: baseline.crunches!, plankSeconds: baseline.plankSeconds!, runTimeSeconds: baseline.runTimeSeconds! },
     passing: {
       pushups: record.components.pushups!.minimum,
       situps: record.components[core]!.minimum,
+      crunches: record.components.crunches!.minimum,
       plankSeconds: record.components.plank!.minimum,
       runTimeSeconds: record.components.run!.minimum,
     },
@@ -135,13 +150,13 @@ function validSettings(value: Record<string, unknown>): value is Record<string, 
   if (typeof value.morningMessageTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.morningMessageTime)) return false
   if (!value.baselines || typeof value.baselines !== 'object') return false
   const baselines = value.baselines as Record<string, unknown>
-  for (const key of ['pushups', 'situps', 'plankSeconds', 'runTimeSeconds']) {
+  for (const key of ['pushups', 'situps', 'crunches', 'plankSeconds', 'runTimeSeconds']) {
     const metric = baselines[key]
     if (metric !== null && (typeof metric !== 'number' || !Number.isFinite(metric) || metric <= 0 || metric > 100_000)) return false
   }
   if (typeof value.ageBracket !== 'string' || value.ageBracket.length > 40 || typeof value.sex !== 'string' || value.sex.length > 40) return false
   if (typeof value.overPrepMultiplier !== 'number' || !Number.isFinite(value.overPrepMultiplier) || value.overPrepMultiplier < 1 || value.overPrepMultiplier > 3) return false
-  return typeof value.restTimerEnabled === 'boolean' && typeof value.telegramEnabled === 'boolean'
+  return typeof value.restTimerEnabled === 'boolean' && typeof value.restTimerSeconds === 'number' && Number.isInteger(value.restTimerSeconds) && value.restTimerSeconds >= 15 && value.restTimerSeconds <= 300 && typeof value.telegramEnabled === 'boolean'
 }
 function validMetric(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 100_000 }
 
@@ -202,6 +217,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (!body || !body.settings || typeof body.settings !== 'object' || Array.isArray(body.settings) || !validSettings(body.settings as Record<string, unknown>)) return json({ error: 'invalid_settings' }, 400)
     const settings = body.settings
     await env.DB.prepare('INSERT INTO settings (id, settings_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at').bind(JSON.stringify(settings), new Date().toISOString()).run()
+    const today = dateInZone(settings.timezone)
+    await env.DB.prepare("UPDATE days SET plan_json = NULL WHERE date >= ? AND status IN ('pending', 'partial', 'rough')").bind(today).run()
     return json({ settings })
   }
   if (path === '/api/today' && request.method === 'GET') {
@@ -286,7 +303,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (!body || !isDate(body.date) || !body.metrics || typeof body.metrics !== 'object' || Array.isArray(body.metrics)) return json({ error: 'invalid_test' }, 400)
     if (body.date > dateInZone((await getSettings(env.DB)).timezone)) return json({ error: 'test_cannot_be_future' }, 400)
     const metrics = body.metrics as Record<string, unknown>
-    const allowed = ['pushups', 'situps', 'crunches', 'plankSeconds', 'runTimeSeconds']
+    const allowed = ['pushups', 'situps', 'crunches', 'plankSeconds', 'runTimeSeconds', 'waistInches', 'heightInches', 'waistToHeight']
     if (Object.keys(metrics).length === 0 || Object.keys(metrics).some((key) => !allowed.includes(key)) || !Object.values(metrics).every((value) => value === null || validMetric(value))) return json({ error: 'invalid_test_metrics' }, 400)
     const id = crypto.randomUUID()
     const createdAt = new Date().toISOString()
@@ -297,15 +314,15 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     const body = await readJson(request)
     if (!body || !body.metrics || typeof body.metrics !== 'object' || Array.isArray(body.metrics)) return json({ error: 'invalid_score_input' }, 400)
     const metrics = body.metrics as Record<string, unknown>
-    const allowed = ['pushups', 'situps', 'crunches', 'plankSeconds', 'runTimeSeconds']
+    const allowed = ['pushups', 'situps', 'crunches', 'plankSeconds', 'runTimeSeconds', 'waistInches', 'heightInches', 'waistToHeight']
     if (Object.keys(metrics).length === 0 || Object.keys(metrics).some((key) => !allowed.includes(key)) || !Object.values(metrics).every((value) => value === null || validMetric(value))) return json({ error: 'invalid_score_metrics' }, 400)
-    if (body.coreMetric !== 'situps' && body.coreMetric !== 'crunches') return json({ error: 'invalid_core_metric' }, 400)
+    if (body.coreMetric !== 'situps' && body.coreMetric !== 'crunches' && body.coreMetric !== 'plank') return json({ error: 'invalid_core_metric' }, 400)
     const settings = await getSettings(env.DB)
     const result = calculateScore(scoringFile as unknown as ScoringData, {
       ageBracket: settings.ageBracket,
       sex: settings.sex,
       coreMetric: body.coreMetric,
-      metrics: metrics as { pushups?: number; situps?: number; crunches?: number; plankSeconds?: number; runTimeSeconds?: number },
+      metrics: metrics as { pushups?: number; situps?: number; crunches?: number; plankSeconds?: number; runTimeSeconds?: number; waistToHeight?: number },
       overPrepMultiplier: settings.overPrepMultiplier,
     })
     if (result.reason === 'scoring_data_not_loaded') return json({ error: result.reason, scoringLoaded: false }, 503)

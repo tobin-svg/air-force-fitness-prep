@@ -4,7 +4,9 @@ A private, phone-friendly training log built as a small web app. It is designed 
 
 ## Before you begin
 
-The project files are ready, but it is **not published or running online yet**. You will need a GitHub account, a free Cloudflare account, and a Telegram account if you want the morning messages. The app will not calculate scores or create workout targets until verified official standards are added to `data/scoring.json`; that file intentionally contains placeholders today.
+The app is deployed as a private Cloudflare Worker and can be updated through the connected GitHub repository. It uses the current general Air Force PFRA standards in `data/scoring.json`. In Settings, enter your own starting results; the visible example values are editable.
+
+The temporary ship date is February 1, 2027. The Settings date field is editable. Training plans include three runs each week and rotate sit-ups, cross-leg reverse crunches, and planks.
 
 The setup is a one-time process. After the first deployment, changes pushed to the `main` branch deploy automatically.
 
@@ -45,15 +47,15 @@ Cloudflare's documentation describes [creating a Worker in the dashboard](https:
 
 The workflow runs the app checks, builds the project, applies database migrations, and deploys the Worker on every push to `main`. Cloudflare requires an API token and account ID for GitHub Actions deployments. [Cloudflare GitHub Actions guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)
 
-## 4. Copy the project into GitHub Desktop and deploy it
+## 4. Upload or update the project on GitHub
 
-1. Install [GitHub Desktop](https://desktop.github.com/) and sign in.
-2. In GitHub Desktop, choose **File → Clone Repository**, select `air-force-fitness-prep`, and choose a local folder such as **Documents**.
-3. In Finder, press **Command+Shift+G**, paste `/Users/tobinspiller/Documents/Codex/2026-10-26/files-pasted-by-the-user-project`, and press Return to open this project. Open the new cloned `air-force-fitness-prep` folder in a second Finder window. In the project folder, press **Command+A**, then **Command+C**. In the cloned folder, press **Command+Shift+.** to show hidden items, then **Command+V**. Copy the project files and folders, including `.github` and `.gitignore`; do not replace the cloned folder’s hidden `.git` folder.
-4. Return to GitHub Desktop. In the **Summary** box, type `Initial app setup`, click **Commit to main**, then click **Push origin**.
-5. Open the repository’s **Actions** tab and wait for **Build and deploy** to finish successfully. If it fails, open that run and share the error with me; I can help you fix it.
+1. Open your `air-force-fitness-prep` repository on [GitHub](https://github.com/).
+2. Choose **Add file → Upload files**.
+3. On your Mac, double-click the project ZIP to extract it. Drag the project files and folders onto GitHub's upload page. For an update, upload the new `src`, `worker`, `data`, `scripts`, and `config` folders and the updated root files. Keep the repository's existing `.github` folder and `.gitignore`; do not upload `outputs`, `work`, or `.DS_Store`.
+4. Choose **Commit changes** and commit to `main`.
+5. Open the repository's **Actions** tab and wait for **Build and deploy** to finish successfully. The app updates when that run succeeds.
 
-## 4. Add the app's private passphrase
+## 5. Add the app's private passphrase
 
 After the first successful deployment:
 
@@ -65,7 +67,7 @@ After the first successful deployment:
 
 The first page is protected by the passphrase. The app does not have accounts or a sign-up screen.
 
-## 5. Optional: set up Telegram reminders
+## 6. Optional: set up Telegram reminders
 
 You can skip this section and leave Telegram switched off.
 
@@ -80,14 +82,14 @@ You can skip this section and leave Telegram switched off.
 
 The scheduled Worker checks once a minute and sends at the exact configured local time. It records each successful daily send to prevent duplicate reminders.
 
-## 6. Open the app and add your settings
+## 7. Open the app and add your settings
 
 1. In Cloudflare, open the Worker’s **Overview** page and click its `workers.dev` address. It looks like `https://air-force-fitness-prep.<your-subdomain>.workers.dev`.
 2. Enter the `PASS_PHRASE` you created.
 3. Choose the gear icon and enter your ship date, timezone, morning message time, baselines, age bracket, and sex category. Telegram can stay off.
-4. The Score tab can save your test results now. Score calculation and training targets stay unavailable until the official standards are loaded and validated.
+4. The official score chart is already included. Score calculation needs push-ups, one selected core event, a two-mile time, waist, and height. A training plan also needs editable baseline results for push-ups, sit-ups, cross-leg reverse crunches, plank, and the two-mile run.
 
-## 7. Add to your iPhone Home Screen
+## 8. Add to your iPhone Home Screen
 
 1. Open the app address in **Safari** on your iPhone and sign in.
 2. Tap **Share** (the square with the up arrow).
@@ -115,13 +117,15 @@ Terminal will show a local address, usually `http://localhost:5173`. Open that a
 
 ## Scoring data
 
-`data/scoring.schema.md` documents the required format. The official scoring source, age/sex records, component minimums, and score bands belong in `data/scoring.json`. Do not use estimated or remembered standards. The validator intentionally exits with an error until all placeholders have been replaced with verified source data:
+`data/scoring.schema.md` documents the format. The official scoring source, age/sex records, component minimums, and score bands are in `data/scoring.json`. Run the validator to check the score data structure:
 
 ```sh
 npm run validate:scoring
 ```
 
-Once scoring data is loaded, the plan also needs your ship date, age/sex profile, and all four baseline measurements in Settings. Existing saved day plans remain snapshots; changing settings does not rewrite earlier days.
+The app starts with a temporary ship date of February 1, 2027. Replace the editable example results in Settings with your own push-up, sit-up, cross-leg reverse crunch, plank, and 2-mile run baselines. A plan is generated after those results are entered. When you save updated settings, the app refreshes today's plan and future pending plans.
+
+The workout screen includes at least 10 push-ups every day, with additional push-ups on scheduled strength days. Running is scheduled three times per week. Weekly push-up and running volume, plus each core-event target, are capped at a 15% increase over the previous week; recovery weeks and the five-day taper reduce the workload. Settings lets you choose a rest timer from 15 to 300 seconds (default 60). The app uses Times New Roman and shows a brief star animation when you finish a set.
 
 ## Performance audit
 
@@ -132,7 +136,7 @@ The app uses plain CSS, inline SVG, and small image icons, but a Lighthouse scor
 ```sh
 npm test                    # Run the plan, score, and reminder helper checks
 npm run build               # Type-check and build the web app and Worker
-npm run validate:scoring    # Confirm there are no scoring placeholders
+npm run validate:scoring    # Check official scoring data structure
 npm run db:migrate:local    # Prepare a local development database
 npm run db:migrate:remote   # Apply database migrations to Cloudflare
 ```
@@ -142,6 +146,6 @@ npm run db:migrate:remote   # Apply database migrations to Cloudflare
 - `src/` — mobile app, API client, and deterministic plan and score engines.
 - `worker/` — authenticated API, scheduled reminder, and Telegram message formatting.
 - `migrations/` — D1 database tables.
-- `data/scoring.json` — official score data location, currently a guarded placeholder.
+- `data/scoring.json` — official current PFRA score bands for all age brackets and scoring categories.
 - `config/plan.ts` — editable plan settings, including the approved 15% weekly cap and 5-day taper.
 - `.github/workflows/deploy.yml` — checks, database migrations, and deployment on pushes to `main`.

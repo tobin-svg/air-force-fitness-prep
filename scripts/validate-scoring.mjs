@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs'
 const file = new URL('../data/scoring.json', import.meta.url)
 const data = JSON.parse(readFileSync(file, 'utf8'))
 const problems = []
-const required = ['pushups', 'plank', 'run']
+const required = ['pushups', 'plank', 'run', 'waistToHeight']
 
-if (data.schemaVersion !== 1) problems.push('schemaVersion must be 1')
+if (data.schemaVersion !== 2) problems.push('schemaVersion must be 2')
 if (data.status !== 'LOADED') problems.push('status is still a placeholder; set it to LOADED only after verifying the official table')
 if (!data.source?.title || data.source.title.includes('PLACEHOLDER')) problems.push('source.title is missing or still a placeholder')
 if (!/^https:\/\//.test(data.source?.url ?? '') || data.source.url.includes('PLACEHOLDER')) problems.push('source.url must be an official HTTPS URL')
@@ -24,7 +24,7 @@ for (const [recordIndex, record] of (Array.isArray(data.records) ? data.records 
   for (const name of [...required, 'situps', 'crunches']) {
     const component = record.components?.[name]
     if (!component) { if (required.includes(name)) problems.push(`records[${recordIndex}].components.${name} is missing`); continue }
-    if (!['reps', 'seconds'].includes(component.unit)) problems.push(`records[${recordIndex}].components.${name}.unit must be reps or seconds`)
+    if (!['reps', 'seconds', 'ratio'].includes(component.unit)) problems.push(`records[${recordIndex}].components.${name}.unit must be reps, seconds, or ratio`)
     if (typeof component.higherIsBetter !== 'boolean') problems.push(`records[${recordIndex}].components.${name}.higherIsBetter must be boolean`)
     if (!Number.isFinite(component.minimum) || component.minimum <= 0) problems.push(`records[${recordIndex}].components.${name}.minimum is missing`)
     if (!Array.isArray(component.bands) || component.bands.length === 0) { problems.push(`records[${recordIndex}].components.${name}.bands must contain official point ranges`); continue }
