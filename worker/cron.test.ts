@@ -10,11 +10,11 @@ describe('morning message helpers', () => {
   it('formats the stored plan without making up missing training data', () => {
     expect(formatPlan(null)).toBe('Today: training plan not available yet.')
     expect(formatPlan(JSON.stringify({ restDay: false, exercises: [
-      { key: 'pushups', sets: 4, reps: 8 },
+      { key: 'pushups', sets: 4, reps: 2, setTargets: [2, 2, 2, 2] },
       { key: 'core', sets: 3, reps: 10, seconds: 45 },
       { key: 'run', miles: 1.2, kind: 'intervals' },
       { key: 'stretch', minutes: 5 },
-    ] }))).toContain('Push-ups: 4 sets × 8\nCore: 3 sets × 10 · Plank 45 sec\nRun: 1.2 mi · intervals\nStretch: 5 min')
+    ] }))).toContain('Today:\nPush-ups: 8 total (2 + 2 + 2 + 2)\nCore: 3 sets × 10 · Plank 45 sec\nRun: 1.2 mi · intervals\nStretch: 5 min')
   })
 
   it('summarizes completed and partial days with logged numbers', () => {
